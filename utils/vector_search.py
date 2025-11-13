@@ -63,7 +63,14 @@ def semantic_search(query: str, top_k=10):
     from utils.chunker import tokenizer as chunk_tokenizer
 
     query_emb = model.encode(query).tolist()
-    results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
+    
+    # Fetch more results so we can dedupe and still return 10
+    results = index.query(
+        vector=query_emb,
+        top_k=top_k * 5,
+        include_metadata=True
+    )
+    
     matches = results.get("matches", [])
 
     formatted = []
@@ -77,10 +84,16 @@ def semantic_search(query: str, top_k=10):
         print("=================================================\n")
 
         text = metadata.get("text", "")
-        if not text or text in seen_texts:
+        if not text:
             continue
 
-        seen_texts.add(text)
+        # Use HTML to uniquely identify DOM containers
+        unique_key = (metadata.get("html") or "")[:300]
+
+        if unique_key in seen_texts:
+            continue
+
+        seen_texts.add(unique_key)
 
         html_snippet = metadata.get("html", "")
         url = metadata.get("url", "")
@@ -112,4 +125,8 @@ def semantic_search(query: str, top_k=10):
             "path": f"/{path}" if path else "/home"
         })
 
-    return formatted[:top_k]
+        # Stop when we reach EXACTLY top_k (10)
+        if len(formatted) >= top_k:
+            break
+
+    return formatted

@@ -1,4 +1,5 @@
 import os
+import hashlib
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 
@@ -19,77 +20,96 @@ if INDEX_NAME not in [idx["name"] for idx in pc.list_indexes()]:
 
 index = pc.Index(INDEX_NAME)
 
+
 def index_chunks(chunks, url_prefix="", metadata_list=None):
-    """Index chunks (≤500 tokens each) with metadata."""
+    """Index chunks with DOM metadata. Ensures vector IDs never collide."""
     vectors = []
+
+    # Create hashed namespace prefix so URL never causes ID collisions
+    prefix = hashlib.md5(url_prefix.encode()).hexdigest()[:12]
+
     for i, chunk in enumerate(chunks):
-        # Create unique ID using URL prefix to avoid conflicts between different websites
-        vector_id = f"{url_prefix}-{i}" if url_prefix else f"id-{i}"
-        
+
+        # UNIQUE vector id
+        vector_id = f"{prefix}-{i}"
+
         # Base metadata
         metadata = {
             "text": chunk,
             "chunk_id": i,
             "url": url_prefix
         }
-        
-        # Add additional metadata if provided (HTML, path, etc.)
+
+        # Attach DOM metadata (html, tag, class, id, path)
         if metadata_list and i < len(metadata_list):
             metadata.update(metadata_list[i])
-        
+
         vectors.append(
             (vector_id, model.encode(chunk).tolist(), metadata)
         )
+
+    # Upload to Pinecone
     index.upsert(vectors=vectors)
+
+    print("\n===== DEBUG METADATA SENT TO PINECONE =====")
+    print(vectors[0][2])
+    print("============================================\n")
+
     print(f"📤 Indexed {len(vectors)} chunks to Pinecone")
 
+
 def semantic_search(query: str, top_k=10):
-    """Return up to top_k unique results (each ≤500 tokens)."""
+    """Query Pinecone and return DOM-aware chunk results."""
+    from utils.chunker import tokenizer as chunk_tokenizer
+
     query_emb = model.encode(query).tolist()
     results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
     matches = results.get("matches", [])
 
     formatted = []
-    seen_texts = set()  # Track unique chunks to avoid duplicates
-    
-    for i, match in enumerate(matches):
-        metadata = match["metadata"]
+    seen_texts = set()
+
+    for match in matches:
+        metadata = match.get("metadata", {})
+
+        print("\n===== DEBUG METADATA RETURNED FROM PINECONE =====")
+        print(metadata)
+        print("=================================================\n")
+
         text = metadata.get("text", "")
-        url = metadata.get("url", "")
-        html_snippet = metadata.get("html", "")
-        path = metadata.get("path", "/")
-        
-        # Skip duplicates
-        if text in seen_texts:
+        if not text or text in seen_texts:
             continue
+
         seen_texts.add(text)
-        
-        tokens = model.tokenizer.encode(text)
-        
-        # Ensure each chunk is ≤500 tokens
-        if len(tokens) > 500:
-            truncated_text = model.tokenizer.decode(tokens[:500])
-            truncated_html = html_snippet[:500] if html_snippet else ""
-        else:
-            truncated_text = text
-            truncated_html = html_snippet
-        
-        # Calculate match percentage (score is typically 0-1, convert to percentage)
-        match_percentage = round(match["score"] * 100, 0)
-        
-        # Use HTML as chunk_text if available (like in the UI mockup)
-        display_text = truncated_html if truncated_html else truncated_text
-        
+
+        html_snippet = metadata.get("html", "")
+        url = metadata.get("url", "")
+        path = metadata.get("path", "home")
+
+        # Token truncation
+        tokens = chunk_tokenizer.encode(text, add_special_tokens=False)
+        truncated_text = chunk_tokenizer.decode(tokens[:500]) if len(tokens) > 500 else text
+
+        score_percent = round(match["score"] * 100, 2)
+
         formatted.append({
             "rank": len(formatted) + 1,
-            "score": round(match["score"] * 100, 2),
-            "match_percentage": f"{match_percentage}% match",
+            "score": score_percent,
+            "match_percentage": f"{int(score_percent)}%",
             "tokens": min(len(tokens), 500),
-            "chunk_text": display_text,
+
+            # Main content
+            "chunk_text": truncated_text,
+            "html": html_snippet,
+
+            # DOM metadata
+            "tag_name": metadata.get("tag_name", ""),
+            "tag_id": metadata.get("tag_id", ""),
+            "tag_class": metadata.get("tag_class", ""),
+
+            # Navigation
             "url": url,
-            "path": f"Path: /{path}" if path and path != "/" else "Path: /home",
-            "html": truncated_html
+            "path": f"/{path}" if path else "/home"
         })
 
-    print(f"🔎 Returning {len(formatted)} unique results (each ≤500 tokens)")
-    return formatted
+    return formatted[:top_k]

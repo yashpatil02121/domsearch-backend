@@ -20,7 +20,7 @@ pip install -r requirements.txt
 PINECONE_API_KEY=pcsk_5AiSFQ_4EQX7JiQ5PCWcoTCPDqXmhsnBuB8Ys3o6iSg84hjs6SBSHVmWxrWEJSFJzH6xnR
 PINECONE_INDEX_NAME=developer-quickstart-py
 EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
-MAX_TOKENS_PER_CHUNK=5000
+MAX_TOKENS_PER_CHUNK=500
 
 <!-- Run the application -->
 uvicorn main:app --reload

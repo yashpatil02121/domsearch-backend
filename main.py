@@ -10,23 +10,30 @@ from utils.vector_search import index_chunks, semantic_search
 
 app = FastAPI()
 
+# not used for now but can be used for bulk indexing in the future
 class IndexRequest(BaseModel):
     urls: List[str]
 
+# index a single website
 @app.post("/index")
 def index_website(url: str = Query(...)):
+    # extract the structured content of the website
     structured_content = extract_text_with_structure(url)
 
     all_chunks = []
+    # list of metadata for each chunk
     metadata_list = []
 
     for item in structured_content:
+        # text of the content
         text = item["text"]
         chunks = chunk_text(text)
 
         for chunk in chunks:
+            # add the chunk to the list of all chunks
             all_chunks.append(chunk)
 
+            # add the metadata to the list of metadata
             metadata_list.append({
                 "html": item["html"],
                 "path": item["path"],
@@ -36,13 +43,15 @@ def index_website(url: str = Query(...)):
                 "full_text": text
             })
 
+    # index the chunks
     index_chunks(all_chunks, url_prefix=url, metadata_list=metadata_list)
 
     print("\n===== DEBUG METADATA BEFORE INDEXING =====")
+    # print the metadata of the first chunk for debugging
     print(metadata_list[0])
     print("==========================================\n")
 
-
+    # return the result
     return {
         "message": f"Indexed {len(all_chunks)} chunks from {url}",
         "total_chunks": len(all_chunks),
